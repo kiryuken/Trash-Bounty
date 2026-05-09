@@ -1,0 +1,52 @@
+# Local environment and secrets
+*.env
+*.env.local
+*.local
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+
+# Go
+backend/server_linux
+backend/uploads/
+*.test
+coverage.out
+
+# Flutter / Dart
+frontend/.dart_tool/
+frontend/.flutter-plugins
+frontend/.flutter-plugins-dependencies
+frontend/.packages
+frontend/build/
+frontend/.idea/
+frontend/*.iml
+
+# Android / Gradle machine-local config
+*.iml
+.gradle/
+.kotlin/
+frontend/android/.gradle/
+frontend/android/local.properties
+frontend/android/local.properties.*
+frontend/android/key.properties
+frontend/android/*.jks
+frontend/android/*.keystore
+
+# IDE / OS
+.idea/
+.DS_Store
+Thumbs.db
+.vscode/
+
+# Local planning and workspace-only docs
+/AGENT_MASTER_PLAN.md
+/ATTRIBUTIONS.md
+/BACKEND_GUIDE.md
+/checker.md
+/DOCX_SKILL.md
+/FLUTTER_CONVERSION_GUIDE.md
+/plan-prod.md
+/plan_drift_port.md

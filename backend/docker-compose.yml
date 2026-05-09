@@ -1,0 +1,67 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: trashbounty_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-trashbounty}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-trashbounty_secret_2026}
+      POSTGRES_DB: ${DB_NAME:-trashbounty_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./internal/db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-trashbounty} -d ${DB_NAME:-trashbounty_db}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build: .
+    container_name: trashbounty_api
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_USER=${DB_USER:-trashbounty}
+      - DB_PASSWORD=${DB_PASSWORD:-trashbounty_secret_2026}
+      - DB_NAME=${DB_NAME:-trashbounty_db}
+      - DB_SSLMODE=disable
+      - JWT_SECRET=${JWT_SECRET}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - GPT_MINI_MODEL=${GPT_MINI_MODEL:-gpt-5.4-mini}
+      - GPT_STANDARD_MODEL=${GPT_STANDARD_MODEL:-gpt-4o}
+      - GPT_CHAT_MODEL=${GPT_CHAT_MODEL:-gpt-5.4-mini}
+      - AGENTS_INTERNAL_URL=http://agents:8000
+      - AGENTS_INTERNAL_SECRET=${AGENTS_INTERNAL_SECRET:-trashbounty_internal_secret}
+      - PORT=${BACKEND_PORT:-8080}
+      - APP_ENV=production
+    ports:
+      - "${BACKEND_PORT:-8080}:${BACKEND_PORT:-8080}"
+    volumes:
+      - ./uploads:/app/uploads
+
+  agents:
+    build: ../agents
+    container_name: trashbounty_agents
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_started
+    environment:
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TRASHBOUNTY_API_URL=http://app:${BACKEND_PORT:-8080}
+      - TRASHBOUNTY_INTERNAL_SECRET=${AGENTS_INTERNAL_SECRET:-trashbounty_internal_secret}
+      - PORT=8000
+    ports:
+      - "8000:8000"
+
+volumes:
+  postgres_data:
