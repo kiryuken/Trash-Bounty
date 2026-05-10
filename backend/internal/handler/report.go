@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 
@@ -105,6 +107,41 @@ func (h *ReportHandler) GetStatus(w http.ResponseWriter, r *http.Request) {
 	response.JSON(w, http.StatusOK, map[string]any{
 		"status":   report.Status,
 		"progress": progress,
+	})
+}
+
+func (h *ReportHandler) EscalateToAgency(w http.ResponseWriter, r *http.Request) {
+	userID := middleware.GetUserID(r.Context())
+	reportID := r.PathValue("id")
+
+	var body struct {
+		UrgencyReason string `json:"urgency_reason"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		response.Error(w, http.StatusBadRequest, "request body tidak valid")
+		return
+	}
+
+	err := h.ReportSvc.EscalateToAgency(r.Context(), reportID, userID, body.UrgencyReason)
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrReportEscalationReasonRequired):
+			response.Error(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, service.ErrReportEscalationNotFound):
+			response.Error(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, service.ErrReportEscalationUnavailable),
+			errors.Is(err, service.ErrReportEscalationPending),
+			errors.Is(err, service.ErrReportEscalationSent):
+			response.Error(w, http.StatusConflict, err.Error())
+		default:
+			response.Error(w, http.StatusInternalServerError, "gagal meneruskan laporan ke dinas")
+		}
+		return
+	}
+
+	response.JSON(w, http.StatusAccepted, map[string]any{
+		"status":  "pending",
+		"message": "Laporan sedang diteruskan ke dinas lingkungan hidup",
 	})
 }
 

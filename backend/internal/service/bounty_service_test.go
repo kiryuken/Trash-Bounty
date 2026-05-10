@@ -372,7 +372,10 @@ func TestBountyServiceComplete(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, reporter_id, image_url, location_text, latitude, longitude,
 		       status, waste_type, severity, estimated_weight_kg, ai_confidence, ai_reasoning,
-		       mini_raw_result, standard_raw_result, points_earned, reward_idr, created_at, updated_at
+		       mini_raw_result, standard_raw_result, points_earned, reward_idr,
+		       agency_escalation_status, agency_escalation_reason, agency_escalation_requested_at,
+		       agency_escalation_sent_at, agency_escalation_failed_at, agency_escalation_last_error,
+		       created_at, updated_at
 		FROM reports WHERE id = $1`)).
 			WithArgs("report-1").
 			WillReturnRows(reportDetailRows().AddRow(
@@ -383,6 +386,12 @@ func TestBountyServiceComplete(t *testing.T) {
 				-6.2,
 				106.8,
 				"bounty_created",
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
 				nil,
 				nil,
 				nil,
@@ -464,7 +473,10 @@ func TestBountyServiceComplete(t *testing.T) {
 		mock.ExpectQuery(regexp.QuoteMeta(`
 		SELECT id, reporter_id, image_url, location_text, latitude, longitude,
 		       status, waste_type, severity, estimated_weight_kg, ai_confidence, ai_reasoning,
-		       mini_raw_result, standard_raw_result, points_earned, reward_idr, created_at, updated_at
+		       mini_raw_result, standard_raw_result, points_earned, reward_idr,
+		       agency_escalation_status, agency_escalation_reason, agency_escalation_requested_at,
+		       agency_escalation_sent_at, agency_escalation_failed_at, agency_escalation_last_error,
+		       created_at, updated_at
 		FROM reports WHERE id = $1`)).
 			WithArgs("report-1").
 			WillReturnRows(reportDetailRows().AddRow(
@@ -475,6 +487,12 @@ func TestBountyServiceComplete(t *testing.T) {
 				-6.2,
 				106.8,
 				"bounty_created",
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
+				nil,
 				nil,
 				nil,
 				nil,
@@ -613,6 +631,12 @@ func reportDetailRows() *sqlmock.Rows {
 		"standard_raw_result",
 		"points_earned",
 		"reward_idr",
+		"agency_escalation_status",
+		"agency_escalation_reason",
+		"agency_escalation_requested_at",
+		"agency_escalation_sent_at",
+		"agency_escalation_failed_at",
+		"agency_escalation_last_error",
 		"created_at",
 		"updated_at",
 	})

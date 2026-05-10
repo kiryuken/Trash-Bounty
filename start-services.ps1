@@ -46,8 +46,7 @@ if ($backendRunning.Trim() -eq "yes") {
         "wsl -e bash -c 'cd $BackendDir && env PORT=$BackendPort ./server_linux'"
     ) -WindowStyle Normal
     Start-Sleep -Seconds 3
-    $check = wsl -e bash -c "curl -fsS --connect-timeout 1 --max-time 2 $BackendHealthUrl 2>&1 | head -c 30"
-    if ($check) {
+    if (Test-BackendHealthy) {
         Write-Host "[OK] Backend berjalan di localhost:$BackendPort" -ForegroundColor Green
     } else {
         Write-Host "[WARN] Backend mungkin belum siap, cek terminal baru." -ForegroundColor Yellow
@@ -55,9 +54,9 @@ if ($backendRunning.Trim() -eq "yes") {
 }
 
 # --- Cek apakah cloudflared sudah berjalan ---
-$tunnelRunning = wsl -e bash -c "pgrep -x cloudflared > /dev/null 2>&1 && echo yes || echo no"
+$tunnelRunning = wsl -e bash -c "pgrep -af '[c]loudflared.*tunnel.*run.*$TunnelName' > /dev/null 2>&1 && echo yes || echo no"
 if ($tunnelRunning.Trim() -eq "yes") {
-    Write-Host "[SKIP] Cloudflare tunnel sudah berjalan." -ForegroundColor Yellow
+    Write-Host "[SKIP] Cloudflare tunnel $TunnelName sudah berjalan." -ForegroundColor Yellow
 } else {
     Write-Host "[START] Memulai Cloudflare tunnel ($TunnelName)..." -ForegroundColor Green
     Start-Process powershell -ArgumentList @(

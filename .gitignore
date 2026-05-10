@@ -50,3 +50,7 @@ Thumbs.db
 /FLUTTER_CONVERSION_GUIDE.md
 /plan-prod.md
 /plan_drift_port.md
+
+#start-services
+/start-services.sh
+/start-services.ps1

@@ -51,6 +51,7 @@ class ApiEndpoints {
   // Dynamic
   static String reportStatus(String id) => '/reports/$id/status';
   static String reportDetail(String id) => '/reports/$id';
+  static String reportEscalate(String id) => '/reports/$id/escalate';
   static String bountyDetail(String id) => '/bounties/$id';
   static String bountyTake(String id) => '/bounties/$id/take';
   static String bountyComplete(String id) => '/bounties/$id/complete';

@@ -117,6 +117,7 @@ func main() {
 	mux.Handle("POST /v1/reports", protected(reportH.Create))
 	mux.Handle("GET /v1/reports/mine", protected(reportH.ListMine))
 	mux.Handle("GET /v1/reports/{id}", protected(reportH.GetByID))
+	mux.Handle("POST /v1/reports/{id}/escalate", protected(reportH.EscalateToAgency))
 	mux.Handle("GET /v1/reports/{id}/status", protected(reportH.GetStatus))
 
 	// Protected: Bounties

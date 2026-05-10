@@ -22,6 +22,12 @@ type Report struct {
 	StandardRawResult *json.RawMessage `json:"standard_raw_result,omitempty"`
 	PointsEarned      *int             `json:"points_earned"`
 	RewardIDR         *float64         `json:"reward_idr"`
+	AgencyEscalationStatus      *string    `json:"agency_escalation_status,omitempty"`
+	AgencyEscalationReason      *string    `json:"agency_escalation_reason,omitempty"`
+	AgencyEscalationRequestedAt *time.Time `json:"agency_escalation_requested_at,omitempty"`
+	AgencyEscalationSentAt      *time.Time `json:"agency_escalation_sent_at,omitempty"`
+	AgencyEscalationFailedAt    *time.Time `json:"agency_escalation_failed_at,omitempty"`
+	AgencyEscalationLastError   *string    `json:"agency_escalation_last_error,omitempty"`
 	CreatedAt         time.Time        `json:"created_at"`
 	UpdatedAt         time.Time        `json:"updated_at"`
 }

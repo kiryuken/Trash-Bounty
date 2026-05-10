@@ -20,6 +20,9 @@ class ReportPage extends ConsumerStatefulWidget {
 
 enum _Stage { upload, analyzing, result }
 
+const _agencyRecipient = 'dinaslh@jakarta.go.id';
+const _analyzedReportStatuses = {'approved', 'bounty_created', 'completed', 'rejected'};
+
 class _ReportPageState extends ConsumerState<ReportPage> {
   _Stage _stage = _Stage.upload;
   File? _imageFile;
@@ -34,6 +37,7 @@ class _ReportPageState extends ConsumerState<ReportPage> {
   bool _isDetectingLocation = false;
   bool _showLocationValidationError = false;
   String _analysisErrorMessage = 'Coba lagi nanti';
+  bool _isEscalatingAgency = false;
   bool _pollRequestInFlight = false;
   int _pollGeneration = 0;
   Timer? _pollTimer;
@@ -42,6 +46,12 @@ class _ReportPageState extends ConsumerState<ReportPage> {
   void dispose() {
     _cancelPolling();
     super.dispose();
+  }
+
+  Future<Map<String, dynamic>?> _fetchReportDetail(String reportId) async {
+    final client = ref.read(dioProvider);
+    final response = await client.get(ApiEndpoints.reportDetail(reportId));
+    return response.data['data'] as Map<String, dynamic>?;
   }
 
   Future<void> _detectLocation() async {
@@ -310,8 +320,7 @@ class _ReportPageState extends ConsumerState<ReportPage> {
         }
 
         _stopPollingTimer(timer);
-        final reportResp = await client.get(ApiEndpoints.reportDetail(reportId));
-        final report = reportResp.data['data'] as Map<String, dynamic>?;
+        final report = await _fetchReportDetail(reportId);
 
         if (!mounted || pollGeneration != _pollGeneration) {
           return;
@@ -354,6 +363,272 @@ class _ReportPageState extends ConsumerState<ReportPage> {
     });
   }
 
+  bool _canEscalateToAgency(Map<String, dynamic>? report) {
+    final status = report?['status'] as String?;
+    return status != null && _analyzedReportStatuses.contains(status);
+  }
+
+  Future<String?> _showAgencyEscalationDialog() async {
+    final reasonController = TextEditingController();
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        String? validationError;
+
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('Lapor ke Dinas'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Email laporan akan dikirim ke $_agencyRecipient beserta foto report. Jelaskan alasan urgensinya agar dinas bisa menilai prioritas penanganan.',
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: reasonController,
+                    maxLines: 4,
+                    autofocus: true,
+                    decoration: InputDecoration(
+                      labelText: 'Alasan urgensi',
+                      hintText: 'Contoh: sampah menutup saluran air dan berisiko memicu banjir lokal.',
+                      border: const OutlineInputBorder(),
+                      errorText: validationError,
+                    ),
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Batal'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final trimmed = reasonController.text.trim();
+                    if (trimmed.isEmpty) {
+                      setDialogState(() => validationError = 'Alasan urgensi wajib diisi.');
+                      return;
+                    }
+                    Navigator.of(dialogContext).pop(trimmed);
+                  },
+                  child: const Text('Kirim ke Dinas'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    reasonController.dispose();
+    return result;
+  }
+
+  Future<void> _submitAgencyEscalation() async {
+    final reportId = _reportResult?['id'] as String?;
+    if (reportId == null || _isEscalatingAgency) return;
+
+    final urgencyReason = await _showAgencyEscalationDialog();
+    if (urgencyReason == null || !mounted) return;
+
+    final previousReport = _reportResult == null ? null : Map<String, dynamic>.from(_reportResult!);
+    setState(() {
+      _isEscalatingAgency = true;
+      _reportResult = {
+        ...?_reportResult,
+        'agency_escalation_status': 'pending',
+        'agency_escalation_reason': urgencyReason,
+        'agency_escalation_requested_at': DateTime.now().toUtc().toIso8601String(),
+        'agency_escalation_sent_at': null,
+        'agency_escalation_failed_at': null,
+        'agency_escalation_last_error': null,
+      };
+    });
+
+    try {
+      final client = ref.read(dioProvider);
+      await client.post(
+        ApiEndpoints.reportEscalate(reportId),
+        data: {'urgency_reason': urgencyReason},
+      );
+
+      final refreshed = await _fetchReportDetail(reportId);
+      if (!mounted) return;
+      setState(() {
+        _reportResult = refreshed ?? _reportResult;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Laporan sedang diteruskan ke dinas lingkungan hidup.')),
+      );
+    } catch (error, stackTrace) {
+      logAppError('Failed to escalate report to agency', error, stackTrace);
+      if (!mounted) return;
+      setState(() {
+        _reportResult = previousReport;
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            extractErrorMessage(
+              error,
+              fallbackMessage: 'Gagal meneruskan laporan ke dinas. Coba lagi.',
+            ),
+          ),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _isEscalatingAgency = false);
+      }
+    }
+  }
+
+  Widget _buildAgencyEscalationCard() {
+    if (!_canEscalateToAgency(_reportResult)) {
+      return const SizedBox.shrink();
+    }
+
+    final escalationStatus = _reportResult?['agency_escalation_status'] as String?;
+    final escalationReason = (_reportResult?['agency_escalation_reason'] as String?)?.trim();
+    final lastError = (_reportResult?['agency_escalation_last_error'] as String?)?.trim();
+
+    Color backgroundColor;
+    Color borderColor;
+    Color accentColor;
+    IconData icon;
+    String title;
+    String description;
+    String? actionLabel;
+
+    switch (escalationStatus) {
+      case 'pending':
+        backgroundColor = AppColors.amber50;
+        borderColor = AppColors.amber100;
+        accentColor = AppColors.amber600;
+        icon = LucideIcons.clock3;
+        title = 'Sedang diteruskan ke dinas';
+        description = 'Email laporan sedang diproses untuk dikirim ke $_agencyRecipient.';
+        actionLabel = null;
+      case 'sent':
+        backgroundColor = AppColors.green50;
+        borderColor = AppColors.green100;
+        accentColor = AppColors.green700;
+        icon = LucideIcons.mailCheck;
+        title = 'Laporan sudah diteruskan';
+        description = 'Email laporan dan foto sudah diteruskan ke $_agencyRecipient.';
+        actionLabel = null;
+      case 'failed':
+        backgroundColor = AppColors.red50;
+        borderColor = AppColors.red200;
+        accentColor = AppColors.red600;
+        icon = LucideIcons.mailWarning;
+        title = 'Pengiriman ke dinas gagal';
+        description = lastError?.isNotEmpty == true
+            ? lastError!
+            : 'Coba kirim lagi ketika koneksi backend atau email service sudah normal.';
+        actionLabel = 'Coba Kirim Lagi';
+      default:
+        backgroundColor = AppColors.blue50;
+        borderColor = AppColors.blue100;
+        accentColor = AppColors.blue600;
+        icon = LucideIcons.mail;
+        title = 'Butuh penanganan dinas?';
+        description = 'Jika kasus ini memang perlu tindak lanjut resmi, Anda bisa meneruskan laporan beserta foto ke $_agencyRecipient.';
+        actionLabel = 'Lapor ke Dinas';
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: borderColor),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Icon(icon, color: accentColor, size: 20),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: accentColor,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    Text(
+                      description,
+                      style: const TextStyle(color: AppColors.gray700, height: 1.5),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (escalationReason != null && escalationReason.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: borderColor),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Alasan urgensi',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w700,
+                      color: accentColor,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    escalationReason,
+                    style: const TextStyle(color: AppColors.gray700, height: 1.5),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (actionLabel != null) ...[
+            const SizedBox(height: 16),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: _isEscalatingAgency ? null : _submitAgencyEscalation,
+                icon: _isEscalatingAgency
+                    ? const SizedBox(
+                        width: 16,
+                        height: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                      )
+                    : Icon(actionLabel == 'Coba Kirim Lagi' ? LucideIcons.refreshCw : LucideIcons.send, size: 18),
+                label: Text(_isEscalatingAgency ? 'Mengirim...' : actionLabel),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
   void _reset() {
     _cancelPolling();
     setState(() {
@@ -369,6 +644,7 @@ class _ReportPageState extends ConsumerState<ReportPage> {
       _isDetectingLocation = false;
       _showLocationValidationError = false;
       _analysisErrorMessage = 'Coba lagi nanti';
+      _isEscalatingAgency = false;
     });
   }
 
@@ -1051,6 +1327,11 @@ class _ReportPageState extends ConsumerState<ReportPage> {
             borderColor: AppColors.red200,
             icon: LucideIcons.alertCircle,
           ),
+        ],
+
+        if (_reportResult != null) ...[
+          const SizedBox(height: 12),
+          _buildAgencyEscalationCard(),
         ],
 
         const SizedBox(height: 16),

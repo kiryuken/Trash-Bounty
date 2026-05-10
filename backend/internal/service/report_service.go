@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
@@ -13,6 +15,14 @@ import (
 	"trashbounty/internal/model"
 	"trashbounty/internal/repository"
 	"trashbounty/internal/service/ai"
+)
+
+var (
+	ErrReportEscalationReasonRequired = errors.New("alasan urgensi wajib diisi")
+	ErrReportEscalationNotFound       = errors.New("laporan tidak ditemukan")
+	ErrReportEscalationUnavailable    = errors.New("laporan belum selesai dianalisis")
+	ErrReportEscalationPending        = errors.New("laporan sedang dikirim ke dinas")
+	ErrReportEscalationSent           = errors.New("laporan sudah dikirim ke dinas")
 )
 
 type ReportService struct {
@@ -250,6 +260,62 @@ func (s *ReportService) GetByID(ctx context.Context, id string) (*model.Report, 
 	return s.ReportRepo.GetByID(ctx, id)
 }
 
+func (s *ReportService) EscalateToAgency(ctx context.Context, reportID, userID, reason string) error {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return ErrReportEscalationReasonRequired
+	}
+
+	report, err := s.ReportRepo.GetByIDForUser(ctx, reportID, userID)
+	if err != nil {
+		return ErrReportEscalationNotFound
+	}
+	if !isAgencyEscalationEligible(report.Status) {
+		return ErrReportEscalationUnavailable
+	}
+	if report.AgencyEscalationStatus != nil {
+		switch *report.AgencyEscalationStatus {
+		case "pending":
+			return ErrReportEscalationPending
+		case "sent":
+			return ErrReportEscalationSent
+		}
+	}
+
+	reporter, err := s.UserRepo.GetByID(ctx, userID)
+	if err != nil {
+		return err
+	}
+
+	requested, err := s.ReportRepo.RequestAgencyEscalation(ctx, reportID, reason)
+	if err != nil {
+		return err
+	}
+	if !requested {
+		current, currentErr := s.ReportRepo.GetByIDForUser(ctx, reportID, userID)
+		if currentErr == nil && current.AgencyEscalationStatus != nil {
+			switch *current.AgencyEscalationStatus {
+			case "pending":
+				return ErrReportEscalationPending
+			case "sent":
+				return ErrReportEscalationSent
+			}
+		}
+		return ErrReportEscalationPending
+	}
+
+	now := time.Now().UTC()
+	report.AgencyEscalationStatus = stringPtr("pending")
+	report.AgencyEscalationReason = stringPtr(reason)
+	report.AgencyEscalationRequestedAt = &now
+	report.AgencyEscalationSentAt = nil
+	report.AgencyEscalationFailedAt = nil
+	report.AgencyEscalationLastError = nil
+
+	s.sendAgencyEscalationAsync(report, reporter, reason, now)
+	return nil
+}
+
 func (s *ReportService) GetByIDForUser(ctx context.Context, id, userID string) (*model.Report, error) {
 	return s.ReportRepo.GetByIDForUser(ctx, id, userID)
 }
@@ -260,6 +326,110 @@ func (s *ReportService) ListByUser(ctx context.Context, userID string, limit, of
 
 func (s *ReportService) ListRecent(ctx context.Context, limit, offset int) ([]model.ReportSummary, error) {
 	return s.ReportRepo.ListRecent(ctx, limit, offset)
+}
+
+func (s *ReportService) sendAgencyEscalationAsync(report *model.Report, reporter *model.User, reason string, requestedAt time.Time) {
+	if report == nil || reporter == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		fail := func(message string) {
+			if message == "" {
+				message = "gagal mengirim email ke dinas"
+			}
+			_ = s.ReportRepo.MarkAgencyEscalationFailed(ctx, report.ID, message)
+			_ = s.NotifRepo.Create(ctx, &model.Notification{
+				UserID:  report.ReporterID,
+				Type:    "warning",
+				Message: fmt.Sprintf("Laporan ke dinas untuk \"%s\" gagal dikirim. %s", report.LocationText, message),
+			})
+		}
+
+		if s.AgentsInternalURL == "" || s.AgentsInternalSecret == "" {
+			fail("integrasi email dinas belum dikonfigurasi")
+			return
+		}
+
+		payload, err := json.Marshal(map[string]any{
+			"report_id":           report.ID,
+			"report_status":       report.Status,
+			"reporter_id":         report.ReporterID,
+			"reporter_name":       reporter.Name,
+			"reporter_email":      reporter.Email,
+			"location_text":       report.LocationText,
+			"latitude":            report.Latitude,
+			"longitude":           report.Longitude,
+			"urgency_reason":      reason,
+			"requested_at":        requestedAt.Format(time.RFC3339),
+			"image_url":           report.ImageURL,
+			"waste_type":          report.WasteType,
+			"severity":            report.Severity,
+			"ai_reasoning":        report.AiReasoning,
+			"ai_confidence":       report.AiConfidence,
+			"estimated_weight_kg": report.EstimatedWeightKG,
+			"report_created_at":   report.CreatedAt.Format(time.RFC3339),
+		})
+		if err != nil {
+			fail("payload email dinas tidak valid")
+			return
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.AgentsInternalURL+"/internal/agency-escalations", bytes.NewReader(payload))
+		if err != nil {
+			fail("request email dinas tidak dapat dibuat")
+			return
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Internal-Secret", s.AgentsInternalSecret)
+
+		client := &http.Client{Timeout: 30 * time.Second}
+		resp, err := client.Do(req)
+		if err != nil {
+			fail("layanan email dinas tidak merespons")
+			return
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			message := fmt.Sprintf("layanan email dinas mengembalikan status %d", resp.StatusCode)
+			body, readErr := io.ReadAll(io.LimitReader(resp.Body, 512))
+			if readErr == nil {
+				trimmed := strings.TrimSpace(string(body))
+				if trimmed != "" {
+					message = trimmed
+				}
+			}
+			fail(message)
+			return
+		}
+
+		if err := s.ReportRepo.MarkAgencyEscalationSent(ctx, report.ID); err != nil {
+			log.Printf("[AgencyEscalation] failed to mark sent for report %s: %v", report.ID, err)
+			return
+		}
+		_ = s.NotifRepo.Create(ctx, &model.Notification{
+			UserID:  report.ReporterID,
+			Type:    "info",
+			Message: fmt.Sprintf("Laporan di \"%s\" sudah diteruskan ke dinas lingkungan hidup.", report.LocationText),
+		})
+	}()
+}
+
+func isAgencyEscalationEligible(status string) bool {
+	switch status {
+	case "approved", "bounty_created", "completed", "rejected":
+		return true
+	default:
+		return false
+	}
+}
+
+func stringPtr(value string) *string {
+	return &value
 }
 
 func (s *ReportService) checkReportAchievements(ctx context.Context, userID string) {

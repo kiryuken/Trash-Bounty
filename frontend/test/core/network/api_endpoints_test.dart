@@ -16,4 +16,8 @@ void main() {
 
     expect(ApiEndpoints.baseUrl, 'http://127.0.0.1:8080/v1');
   });
+
+  test('builds the report escalation endpoint from the report id', () {
+	  expect(ApiEndpoints.reportEscalate('report-123'), '/reports/report-123/escalate');
+  });
 }

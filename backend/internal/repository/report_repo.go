@@ -29,15 +29,22 @@ func (r *ReportRepo) Create(ctx context.Context, rpt *model.Report) error {
 func (r *ReportRepo) GetByID(ctx context.Context, id string) (*model.Report, error) {
 	rpt := &model.Report{}
 	var miniRaw, stdRaw []byte
+	var agencyStatus, agencyReason, agencyLastError sql.NullString
+	var agencyRequestedAt, agencySentAt, agencyFailedAt sql.NullTime
 	err := r.DB.QueryRowContext(ctx, `
 		SELECT id, reporter_id, image_url, location_text, latitude, longitude,
 		       status, waste_type, severity, estimated_weight_kg, ai_confidence, ai_reasoning,
-		       mini_raw_result, standard_raw_result, points_earned, reward_idr, created_at, updated_at
+		       mini_raw_result, standard_raw_result, points_earned, reward_idr,
+		       agency_escalation_status, agency_escalation_reason, agency_escalation_requested_at,
+		       agency_escalation_sent_at, agency_escalation_failed_at, agency_escalation_last_error,
+		       created_at, updated_at
 		FROM reports WHERE id = $1`, id,
 	).Scan(&rpt.ID, &rpt.ReporterID, &rpt.ImageURL,
 		&rpt.LocationText, &rpt.Latitude, &rpt.Longitude, &rpt.Status,
 		&rpt.WasteType, &rpt.Severity, &rpt.EstimatedWeightKG, &rpt.AiConfidence, &rpt.AiReasoning,
-		&miniRaw, &stdRaw, &rpt.PointsEarned, &rpt.RewardIDR, &rpt.CreatedAt, &rpt.UpdatedAt)
+		&miniRaw, &stdRaw, &rpt.PointsEarned, &rpt.RewardIDR,
+		&agencyStatus, &agencyReason, &agencyRequestedAt, &agencySentAt, &agencyFailedAt, &agencyLastError,
+		&rpt.CreatedAt, &rpt.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -48,6 +55,27 @@ func (r *ReportRepo) GetByID(ctx context.Context, id string) (*model.Report, err
 	if stdRaw != nil {
 		raw := json.RawMessage(stdRaw)
 		rpt.StandardRawResult = &raw
+	}
+	if agencyStatus.Valid {
+		rpt.AgencyEscalationStatus = &agencyStatus.String
+	}
+	if agencyReason.Valid {
+		rpt.AgencyEscalationReason = &agencyReason.String
+	}
+	if agencyRequestedAt.Valid {
+		t := agencyRequestedAt.Time
+		rpt.AgencyEscalationRequestedAt = &t
+	}
+	if agencySentAt.Valid {
+		t := agencySentAt.Time
+		rpt.AgencyEscalationSentAt = &t
+	}
+	if agencyFailedAt.Valid {
+		t := agencyFailedAt.Time
+		rpt.AgencyEscalationFailedAt = &t
+	}
+	if agencyLastError.Valid {
+		rpt.AgencyEscalationLastError = &agencyLastError.String
 	}
 	return rpt, nil
 }
@@ -55,15 +83,22 @@ func (r *ReportRepo) GetByID(ctx context.Context, id string) (*model.Report, err
 func (r *ReportRepo) GetByIDForUser(ctx context.Context, id, userID string) (*model.Report, error) {
 	rpt := &model.Report{}
 	var miniRaw, stdRaw []byte
+	var agencyStatus, agencyReason, agencyLastError sql.NullString
+	var agencyRequestedAt, agencySentAt, agencyFailedAt sql.NullTime
 	err := r.DB.QueryRowContext(ctx, `
 		SELECT id, reporter_id, image_url, location_text, latitude, longitude,
 		       status, waste_type, severity, estimated_weight_kg, ai_confidence, ai_reasoning,
-		       mini_raw_result, standard_raw_result, points_earned, reward_idr, created_at, updated_at
+		       mini_raw_result, standard_raw_result, points_earned, reward_idr,
+		       agency_escalation_status, agency_escalation_reason, agency_escalation_requested_at,
+		       agency_escalation_sent_at, agency_escalation_failed_at, agency_escalation_last_error,
+		       created_at, updated_at
 		FROM reports WHERE id = $1 AND reporter_id = $2`, id, userID,
 	).Scan(&rpt.ID, &rpt.ReporterID, &rpt.ImageURL,
 		&rpt.LocationText, &rpt.Latitude, &rpt.Longitude, &rpt.Status,
 		&rpt.WasteType, &rpt.Severity, &rpt.EstimatedWeightKG, &rpt.AiConfidence, &rpt.AiReasoning,
-		&miniRaw, &stdRaw, &rpt.PointsEarned, &rpt.RewardIDR, &rpt.CreatedAt, &rpt.UpdatedAt)
+		&miniRaw, &stdRaw, &rpt.PointsEarned, &rpt.RewardIDR,
+		&agencyStatus, &agencyReason, &agencyRequestedAt, &agencySentAt, &agencyFailedAt, &agencyLastError,
+		&rpt.CreatedAt, &rpt.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +109,27 @@ func (r *ReportRepo) GetByIDForUser(ctx context.Context, id, userID string) (*mo
 	if stdRaw != nil {
 		raw := json.RawMessage(stdRaw)
 		rpt.StandardRawResult = &raw
+	}
+	if agencyStatus.Valid {
+		rpt.AgencyEscalationStatus = &agencyStatus.String
+	}
+	if agencyReason.Valid {
+		rpt.AgencyEscalationReason = &agencyReason.String
+	}
+	if agencyRequestedAt.Valid {
+		t := agencyRequestedAt.Time
+		rpt.AgencyEscalationRequestedAt = &t
+	}
+	if agencySentAt.Valid {
+		t := agencySentAt.Time
+		rpt.AgencyEscalationSentAt = &t
+	}
+	if agencyFailedAt.Valid {
+		t := agencyFailedAt.Time
+		rpt.AgencyEscalationFailedAt = &t
+	}
+	if agencyLastError.Valid {
+		rpt.AgencyEscalationLastError = &agencyLastError.String
 	}
 	return rpt, nil
 }
@@ -137,6 +193,55 @@ func (r *ReportRepo) UpdateAIResult(ctx context.Context, id string, status, wast
 
 func (r *ReportRepo) UpdateStatus(ctx context.Context, id, status string) error {
 	_, err := r.DB.ExecContext(ctx, `UPDATE reports SET status=$1, updated_at=NOW() WHERE id=$2`, status, id)
+	return err
+}
+
+func (r *ReportRepo) RequestAgencyEscalation(ctx context.Context, id, reason string) (bool, error) {
+	result, err := r.DB.ExecContext(ctx, `
+		UPDATE reports
+		SET agency_escalation_status='pending',
+		    agency_escalation_reason=$1,
+		    agency_escalation_requested_at=NOW(),
+		    agency_escalation_sent_at=NULL,
+		    agency_escalation_failed_at=NULL,
+		    agency_escalation_last_error=NULL,
+		    updated_at=NOW()
+		WHERE id=$2
+		  AND (agency_escalation_status IS NULL OR agency_escalation_status='failed')`,
+		reason, id,
+	)
+	if err != nil {
+		return false, err
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return rows > 0, nil
+}
+
+func (r *ReportRepo) MarkAgencyEscalationSent(ctx context.Context, id string) error {
+	_, err := r.DB.ExecContext(ctx, `
+		UPDATE reports
+		SET agency_escalation_status='sent',
+		    agency_escalation_sent_at=NOW(),
+		    agency_escalation_failed_at=NULL,
+		    agency_escalation_last_error=NULL,
+		    updated_at=NOW()
+		WHERE id=$1`, id,
+	)
+	return err
+}
+
+func (r *ReportRepo) MarkAgencyEscalationFailed(ctx context.Context, id, lastError string) error {
+	_, err := r.DB.ExecContext(ctx, `
+		UPDATE reports
+		SET agency_escalation_status='failed',
+		    agency_escalation_failed_at=NOW(),
+		    agency_escalation_last_error=$1,
+		    updated_at=NOW()
+		WHERE id=$2`, lastError, id,
+	)
 	return err
 }
 
